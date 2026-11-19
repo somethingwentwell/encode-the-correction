@@ -26,8 +26,9 @@ class ProjectCase(unittest.TestCase):
         holder = tempfile.TemporaryDirectory(prefix="etc-test-")
         self.addCleanup(holder.cleanup)
         self.tmp = Path(holder.name).resolve()
-        if REPO.parent in self.tmp.parents:
-            raise AssertionError("tests must run in a temp dir, not next to real repos: %s" % self.tmp)
+        for folder in [self.tmp] + list(self.tmp.parents):
+            if folder == REPO or (folder / ".git").exists():
+                raise AssertionError("tests must run in a temp dir outside any repository, got %s" % self.tmp)
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.project = self.tmp / "my project"  # the space is deliberate: hook commands must quote paths

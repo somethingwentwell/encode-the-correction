@@ -26,13 +26,18 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TOOL = "encode-the-correction"
 TOOL_DIR = ".encode-the-correction"
 CLI_REL = TOOL_DIR + "/cli.py"
 REGISTRY_REL = TOOL_DIR + "/corrections.json"
 MANIFEST_REL = TOOL_DIR + "/manifest.json"
 HOOK_REL = TOOL_DIR + "/hooks/session-start.sh"
+SKILL_NAME = "encode-the-correction"
+SKILL_PATHS = (
+    ".agents/skills/%s/SKILL.md" % SKILL_NAME,
+    ".claude/skills/%s/SKILL.md" % SKILL_NAME,
+)
 RUN = "python3 " + CLI_REL
 
 BEGIN_MARK = (
@@ -57,7 +62,10 @@ This project turns corrections into deterministic checks instead of prose rules.
   impossible (API, types, directory structure). Otherwise encode it as a check:
   `{run} encode --id <kebab-id> --forbid '<regex>' --glob '<files>' --message '<what is wrong>' --fix '<root-cause fix>'`
   Then run `check` again: it must fail on the mistake and pass once the root cause is fixed.
-- Prose in this file is the last resort, for judgment calls that cannot be checked.""".format(run=RUN)
+- Prose in this file is the last resort, for judgment calls that cannot be checked.
+- A project skill is also installed at `.agents/skills/encode-the-correction/` (and
+  `.claude/skills/encode-the-correction/` for Claude Code). Agents that support
+  Agent Skills should load it and follow it automatically.""".format(run=RUN)
 
 HOOK_SH = """\
 #!/bin/sh
@@ -77,6 +85,49 @@ done
 echo "encode-the-correction: Python 3.8+ not found; session check skipped." >&2
 exit 0
 """.format(run=RUN)
+
+SKILL_BODY = """\
+---
+name: encode-the-correction
+description: Turn a human correction of a coding agent into a deterministic project-local check, and run those checks. Use when starting work in this project, before finishing a task, when the user corrects you, when a mistake might recur, or when you are about to add a comment, rule, or AGENTS.md line about a mistake.
+---
+
+# Encode the correction
+
+This project turns corrections into deterministic checks instead of prose rules.
+
+## Command
+
+Prefer `encode-the-correction` if it is on `PATH`. Otherwise, from the project root (the directory that contains `.encode-the-correction/`):
+
+```sh
+python3 .encode-the-correction/cli.py
+```
+
+Both take the same arguments. Run them from anywhere inside the project; they find the registry themselves. Do not copy this tool's GitHub repository into the project.
+
+## When you start, and before you finish
+
+Run `check`. If it fails, fix the named root cause in the code. Do not weaken or delete the check, add an exclude, or leave a comment justifying an exception unless a human explicitly approves it.
+
+Exit codes: 0 pass, 1 violations, 2 configuration or usage error.
+
+## When the human corrects you
+
+Do not add a rule, comment, or AGENTS.md line. First try to make the mistake impossible (API, types, directory structure). Otherwise encode it:
+
+```sh
+encode-the-correction encode --id <kebab-id> --forbid '<regex>' --glob '<files>' --message '<what is wrong>' --fix '<root-cause fix>'
+```
+
+`--require REGEX` and `--forbid-path GLOB` are also available. Then run `check`: it must fail on the mistake and pass once the root cause is fixed. Show the user both results.
+
+Exceptions live only in the registry (`--exclude GLOB`). Nothing in the registry or in project files is executed.
+
+## If the tool is not in this project yet
+
+This skill expects `encode-the-correction adopt` to have been run. Offer to install it. Do not invent a check runner of your own.
+"""
 
 # Session adapters. Each schema below was re-verified against the vendor's
 # official documentation (see docs/adapters.md); do not add a runtime here
@@ -139,6 +190,19 @@ SKIP_DIRS = frozenset(
     [".git", ".hg", ".svn", TOOL_DIR, "node_modules", ".venv", "venv", "__pycache__",
      ".tox", ".mypy_cache", ".pytest_cache"]
 )
+# This tool's own skill folders are instructions, not project source.
+SKIP_PREFIXES = tuple(path.rsplit("/", 1)[0] for path in SKILL_PATHS)
+
+
+def skipped_rel(rel):
+    rel = rel.replace(chr(92), "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    if SKIP_DIRS.intersection(rel.split("/")[:-1]):
+        return True
+    return any(rel == prefix or rel.startswith(prefix + "/") for prefix in SKIP_PREFIXES)
+
+
 MAX_FILE_BYTES = 2 * 1024 * 1024
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -617,6 +681,7 @@ def install(args, fresh):
             raise ToolError("%s is not a directory." % root)
         probe = Project(root)
         taken = [rel for rel in [TOOL_DIR, "AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md"]
+                 + list(SKILL_PATHS)
                  + [ADAPTERS[name]["file"] for name in requested] if probe.exists(rel)]
         if taken:
             raise ToolError(
@@ -640,6 +705,8 @@ def install(args, fresh):
     if adapters:
         plan_owned(plan, HOOK_REL, HOOK_SH, args.force)
     plan_block(plan, "AGENTS.md", AGENTS_BODY)
+    for rel in SKILL_PATHS:
+        plan_owned(plan, rel, SKILL_BODY, args.force)
     plan_claude_md(plan, args.claude_md)
     for name in adapters:
         plan_adapter(plan, name)
@@ -655,9 +722,11 @@ def install(args, fresh):
     plan.show("init" if fresh else "adopt", args.dry_run)
     for name in adapters:
         print("  note: %s - %s (%s)" % (name, ADAPTERS[name]["note"], ADAPTERS[name]["docs"]))
+    print("  note: project skill installed at %s so agents that support "
+          "Agent Skills can follow these instructions automatically." % ", ".join(SKILL_PATHS))
     if not adapters:
-        print("  note: no session hook installed; agents run the check when they follow AGENTS.md. "
-              "Add one with --hooks %s." % "|".join(ADAPTERS))
+        print("  note: no session hook installed; agents run the check when they follow "
+              "AGENTS.md or the installed skill. Add a hook with --hooks %s." % "|".join(ADAPTERS))
     print("Next: %s check" % RUN)
     return 0
 
@@ -699,7 +768,9 @@ def cmd_uninstall(args):
 
     kept = []
     running_vendored = os.path.realpath(__file__) == os.path.realpath(project.path(CLI_REL))
-    for rel, pristine in ((CLI_REL, None if running_vendored else own_source()), (HOOK_REL, HOOK_SH)):
+    owned = [(CLI_REL, None if running_vendored else own_source()), (HOOK_REL, HOOK_SH)]
+    owned.extend((rel, SKILL_BODY) for rel in SKILL_PATHS)
+    for rel, pristine in owned:
         if not project.exists(rel):
             continue
         current = project.read(rel)
@@ -720,7 +791,11 @@ def cmd_uninstall(args):
     for rel in (TOOL_DIR + "/__pycache__", TOOL_DIR + "/hooks/__pycache__"):
         if project.exists(rel):
             plan.rmtree(rel)
-    for rel in [TOOL_DIR + "/hooks", TOOL_DIR] + sorted(manifest["created_dirs"], key=len, reverse=True):
+    skill_dirs = []
+    for rel in SKILL_PATHS:
+        parts = rel.split("/")
+        skill_dirs.extend("/".join(parts[:i]) for i in range(len(parts) - 1, 0, -1))
+    for rel in [TOOL_DIR + "/hooks", TOOL_DIR] + sorted(set(list(manifest["created_dirs"]) + skill_dirs), key=len, reverse=True):
         plan.rmdir_if_empty(rel)
 
     if not plan.report:
@@ -879,7 +954,7 @@ def list_files(root):
     result = []
     for rel in sorted(set(names)):
         full = os.path.join(root, *rel.split("/"))
-        if SKIP_DIRS.intersection(rel.split("/")[:-1]) or os.path.islink(full) or not os.path.isfile(full):
+        if skipped_rel(rel) or os.path.islink(full) or not os.path.isfile(full):
             continue
         result.append(rel)
     return result
@@ -1103,8 +1178,8 @@ def build_parser():
         return p
 
     for name, func, text in (
-        ("init", cmd_init, "Start in a new project. Refuses to touch existing instruction or hook files."),
-        ("adopt", cmd_adopt, "Adopt into an existing project. Merges, preserves existing content, idempotent."),
+        ("init", cmd_init, "Start in a new project, including a project skill agents load automatically. Refuses to touch existing instruction, skill, or hook files."),
+        ("adopt", cmd_adopt, "Adopt into an existing project. Merges, preserves existing content, installs the project skill, idempotent."),
     ):
         p = add(name, func, text, here)
         p.add_argument("--hooks", action="append", metavar="RUNTIME[,RUNTIME]",
@@ -1117,7 +1192,7 @@ def build_parser():
         p.add_argument("--dry-run", action="store_true", help="show what would change; write nothing")
 
     p = add("uninstall", cmd_uninstall,
-            "Remove this tool's tagged blocks, hook entries, and files. Keeps everything else.", here)
+            "Remove this tool's tagged blocks, hook entries, skill files, and files. Keeps everything else.", here)
     p.add_argument("--purge", action="store_true",
                    help="also delete the registry of encoded corrections and tool files you edited")
     p.add_argument("--dry-run", action="store_true", help="show what would be removed; remove nothing")

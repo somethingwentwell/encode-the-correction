@@ -164,12 +164,13 @@ class SchemaTests(AdapterCase):
     def test_only_requested_adapters_are_written(self):
         self.cli("adopt", self.project, "--hooks", "cursor")
         self.assertTrue(self.exists(".cursor/hooks.json"))
-        for rel in (".claude", ".codex", ".github"):
+        self.assertFalse(self.exists(".claude/settings.json"))
+        for rel in (".codex", ".github"):
             self.assertFalse(self.exists(rel), rel)
 
     def test_claude_adapter_uses_shared_project_settings_only(self):
         self.cli("adopt", self.project, "--hooks", "claude")
-        self.assertEqual(sorted(p.name for p in (self.project / ".claude").iterdir()), ["settings.json"])
+        self.assertTrue(self.exists(".claude/settings.json"))
         self.assertFalse(self.exists("CLAUDE.md"), "the hook does not require a CLAUDE.md")
 
     def test_undocumented_runtimes_are_rejected(self):

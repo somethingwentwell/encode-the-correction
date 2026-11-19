@@ -6,6 +6,7 @@ the tool that reads them. Command lines are parsed with the CLI's own parser, so
 documentation cannot drift from the code.
 """
 import contextlib
+from pathlib import Path
 import io
 import re
 import shlex
@@ -281,13 +282,34 @@ class DocumentedCommandTests(unittest.TestCase):
 
     def test_the_pasteable_instruction_prefers_the_installed_cli_and_falls_back_to_the_vendored_one(self):
         instruction = fenced("README.md", "text")[0]
-        self.assertTrue(instruction.startswith('Install the "encode-the-correction" tool from <REPO>'))
+        standalone = text_of("prompts/install-in-this-project.md")
+        self.assertEqual(instruction, standalone)
+        self.assertTrue(instruction.startswith("Install encode-the-correction into this project"))
         installed = instruction.index("`%s check`" % CONSOLE)
         vendored = instruction.index("`python3 .encode-the-correction/cli.py check`")
         self.assertLess(installed, vendored)
-        for needle in ("pipx install git+<REPO>", "encode_the_correction.py adopt .", CONSOLE + " adopt .",
-                       "--hooks claude-code", "Do not commit or push unless I ask."):
+        for needle in ("pipx install git+" + URL + ".git", "encode_the_correction.py adopt .",
+                       CONSOLE + " adopt .", "--hooks claude-code",
+                       ".agents/skills/encode-the-correction/",
+                       "Do not commit or push unless I ask."):
             self.assertIn(needle, instruction)
+
+    def test_the_shipped_skill_matches_the_cli_and_has_portable_frontmatter(self):
+        from encode_the_correction import SKILL_BODY, SKILL_NAME, SKILL_PATHS
+        shipped = text_of("skills/encode-the-correction/SKILL.md")
+        self.assertEqual(shipped, SKILL_BODY)
+        for rel in SKILL_PATHS:
+            self.assertEqual(text_of(rel), SKILL_BODY, rel)
+        self.assertTrue(shipped.startswith("---\n"))
+        end = shipped.find("\n---\n", 4)
+        self.assertGreater(end, 0)
+        front = shipped[4:end]
+        self.assertIn("name: %s" % SKILL_NAME, front)
+        self.assertIn("description:", front)
+        self.assertEqual(Path("skills/encode-the-correction").name, SKILL_NAME)
+        # Portable Agent Skills frontmatter only: do not add runtime-specific keys.
+        for banned in ("alwaysApply", "disable-model-invocation", "globs", "paths"):
+            self.assertNotIn(banned, front)
 
 
 if __name__ == "__main__":

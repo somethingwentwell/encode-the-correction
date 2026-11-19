@@ -48,10 +48,13 @@ Without the install, the same two steps are `python3
 `python3 .encode-the-correction/cli.py check`.
 
 `init` creates `.encode-the-correction/` (a copy of the CLI as `cli.py`, the
-registry `corrections.json`, a manifest) and an `AGENTS.md` with one tagged
-section telling agents to run `check` and to encode corrections as checks. It
-refuses to touch a project that already has `AGENTS.md`, `CLAUDE.md` or an
-install; use `adopt` there.
+registry `corrections.json`, a manifest), an `AGENTS.md` with one tagged
+section telling agents to run `check` and to encode corrections as checks, and
+a project skill at `.agents/skills/encode-the-correction/` (and
+`.claude/skills/encode-the-correction/` for Claude Code) so agents that support
+[Agent Skills](https://agentskills.io) can follow those instructions automatically.
+It refuses to touch a project that already has `AGENTS.md`, `CLAUDE.md`, this
+skill, or an install; use `adopt` there.
 
 Encode a correction, then watch it fail until the root cause is fixed:
 
@@ -86,8 +89,11 @@ Without the install: `python3 /path/to/encode-the-correction/encode_the_correcti
   import (skipped if it already imports or links to `AGENTS.md`), so Claude
   Code reads the same instructions as every other agent. No `CLAUDE.md` is
   created unless you pass `--claude-md always`; `--claude-md never` skips it.
-- **Idempotent.** Running `adopt` again refreshes the tagged block and the CLI
-  copy in place and changes nothing else. Your registry is never overwritten.
+  A project skill is written to `.agents/skills/encode-the-correction/SKILL.md`
+  and `.claude/skills/encode-the-correction/SKILL.md`; existing skill files this
+  tool did not write are left alone.
+- **Idempotent.** Running `adopt` again refreshes the tagged block, the CLI
+  copy and the skill in place and changes nothing else. Your registry is never overwritten.
   `--dry-run` shows the plan; an invalid file aborts before anything is written.
 - **Optional session hooks**, only for runtimes with a documented hook schema
   ([details](docs/adapters.md)). They are merged into existing hook files
@@ -103,47 +109,63 @@ Without the install: `python3 /path/to/encode-the-correction/encode_the_correcti
   Example: `adopt . --hooks claude-code,cursor` (or `--hooks all`).
 - **Uninstall.** `encode-the-correction uninstall` (or `python3
   .encode-the-correction/cli.py uninstall`), run from the project root, removes
-  only the tagged blocks, this tool's hook entries, and the files it added. A
-  registry that holds encoded corrections is kept unless you pass `--purge`.
+  only the tagged blocks, this tool's hook entries, this tool's skill files, and
+  the files it added. A registry that holds encoded corrections is kept unless
+  you pass `--purge`.
 
 ## 4. Hand it to any coding agent
 
-Paste this to an agent that has filesystem and shell access, replacing
-`<REPO>` with `https://github.com/somethingwentwell/encode-the-correction.git`
-or the path of a local clone:
+Paste the prompt below to an agent that has filesystem and shell access. A
+standalone copy lives in [prompts/install-in-this-project.md](prompts/install-in-this-project.md).
+If you have a local clone, use that path instead of the git URL.
 
 ```text
-Install the "encode-the-correction" tool from <REPO> into the current project and use it from now on.
+Install encode-the-correction into this project and use it from now on.
+
+The tool: https://github.com/somethingwentwell/encode-the-correction
 
 1. Choose how you will run the tool. Use the first option that works here:
    a. `encode-the-correction --version` already works: use `encode-the-correction`.
-   b. You may install command-line tools on this machine: run `pipx install git+<REPO>`
-      (for a local path: `pipx install <REPO>`; without pipx, `python3 -m pip install`
-      the same thing inside a virtual environment), then use `encode-the-correction`.
-   c. Otherwise use the tool without installing it: if <REPO> is a git URL, clone it into
-      a temporary directory outside this project; if it is a local path, use it as is.
-      Run it as `python3 <clone>/encode_the_correction.py`. Do not copy the repo into the project.
+   b. You may install command-line tools on this machine: run
+      `pipx install git+https://github.com/somethingwentwell/encode-the-correction.git`
+      (for a local clone: `pipx install /path/to/encode-the-correction`; without pipx,
+      `python3 -m pip install` the same thing inside a virtual environment), then use
+      `encode-the-correction`.
+   c. Otherwise clone the repository into a temporary directory outside this project
+      (or use a local clone as is) and run `python3 <clone>/encode_the_correction.py`.
+      Do not copy the repository into this project.
 2. From the project root run `encode-the-correction adopt .` (option c:
    `python3 <clone>/encode_the_correction.py adopt .`). If you are running in Claude Code,
    Cursor, OpenAI Codex or GitHub Copilot, add --hooks claude-code, --hooks cursor,
    --hooks codex or --hooks copilot for your own runtime only. adopt merges into existing
-   files and preserves their content.
+   files, preserves their content, and installs a project skill at
+   `.agents/skills/encode-the-correction/` (and `.claude/skills/encode-the-correction/`
+   for Claude Code) so you load these instructions automatically next time.
 3. Run `encode-the-correction check` and fix any failure at its root cause. If the
    `encode-the-correction` command is not installed, run the copy that adopt put in the
    project instead: `python3 .encode-the-correction/cli.py check`. Both take the same arguments.
-4. From now on follow the "Encode the correction" section in AGENTS.md: run `check` at the
-   start of each session and before finishing a task; whenever I correct you, encode the
-   correction with `encode-the-correction encode ...` (or
-   `python3 .encode-the-correction/cli.py encode ...`) and show me `check` failing on the
-   mistake and passing after the fix, instead of adding a rule or comment.
+4. From now on follow the encode-the-correction skill and the "Encode the correction"
+   section in AGENTS.md: run `check` at the start of each session and before finishing a
+   task; whenever I correct you, encode the correction with `encode-the-correction encode ...`
+   (or `python3 .encode-the-correction/cli.py encode ...`) and show me `check` failing on
+   the mistake and passing after the fix, instead of adding a rule or comment.
 5. Tell me which files were created or changed. Do not commit or push unless I ask.
 ```
 
-Any agent can install the tool and run the common `check` command. It runs
-**automatically at every session start only** on a runtime whose hook you
-installed with `--hooks` (Claude Code, Cursor, Codex, Copilot). Everywhere else
-it runs when the agent obeys `AGENTS.md`, which is advisory, or when you wire
-`check` into pre-commit or CI as shown next.
+`init` and `adopt` also install a project [Agent Skill](https://agentskills.io)
+at `.agents/skills/encode-the-correction/` (Cursor, Codex, GitHub Copilot, and
+other runtimes that load that directory) and at `.claude/skills/encode-the-correction/`
+(Claude Code). The skill's description is what lets an agent pick it up
+automatically; you can also invoke it with `/encode-the-correction`. The
+canonical skill file in this repository is
+[skills/encode-the-correction/SKILL.md](skills/encode-the-correction/SKILL.md).
+
+Any agent can install the tool and run the common `check` command. Session
+**hooks** run `check` automatically at every session start only on a runtime
+whose hook you installed with `--hooks` (Claude Code, Cursor, Codex, Copilot).
+The **skill** is loaded when the agent decides it is relevant, or when you
+invoke it. Everywhere else, `check` runs when the agent obeys `AGENTS.md`,
+which is advisory, or when you wire `check` into pre-commit or CI as shown next.
 
 ## 5. Enforce it: local lint, pre-commit, any CI
 

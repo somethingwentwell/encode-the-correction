@@ -20,7 +20,7 @@ from pathlib import Path
 
 import miniyaml
 from support import (CLI, CONSOLE, REGISTRY, REPO, TOOL_DIR, VENDORED, InstalledVenv, ProjectCase, copy_repo,
-                     install_tests_skip_reason, pip_env)
+                     install_tests_skip_reason, pip_env, skill_tree)
 
 try:
     import tomllib
@@ -127,7 +127,7 @@ class InstalledLayoutTests(ProjectCase):
     def test_init_creates_a_new_project_and_refuses_an_existing_one(self):
         self.installed("init", "fresh", cwd=self.project)
         self.assertEqual(sorted(self.snapshot(self.project / "fresh")),
-                         [TOOL_DIR, VENDORED, REGISTRY, TOOL_DIR + "/manifest.json", "AGENTS.md"])
+                         sorted([TOOL_DIR, VENDORED, REGISTRY, TOOL_DIR + "/manifest.json", "AGENTS.md"] + skill_tree()))
         before = self.snapshot()
         self.installed("init", "fresh", cwd=self.project, expect=2)
         self.assertEqual(self.snapshot(), before)

@@ -3,7 +3,7 @@ import json
 import os
 import unittest
 
-from support import BEGIN, END, REGISTRY, TOOL_DIR, VENDORED, ProjectCase
+from support import BEGIN, END, REGISTRY, SKILL_PATHS, TOOL_DIR, VENDORED, ProjectCase, skill_tree
 
 USER_AGENTS = "# Agent notes\n\nUse tabs. Run `make test` before committing.\n"
 USER_CLAUDE = "# Claude notes\n\nPrefer small diffs.\n"
@@ -16,8 +16,10 @@ class InitTests(ProjectCase):
         self.assertIn("created", out)
         self.assertEqual(
             sorted(self.snapshot()),
-            [TOOL_DIR, VENDORED, REGISTRY, TOOL_DIR + "/manifest.json", "AGENTS.md"],
+            sorted([TOOL_DIR, VENDORED, REGISTRY, TOOL_DIR + "/manifest.json", "AGENTS.md"] + skill_tree()),
         )
+        for rel in SKILL_PATHS:
+            self.assertIn("name: encode-the-correction", self.read(rel))
         agents = self.read("AGENTS.md")
         self.assertTrue(agents.startswith(BEGIN))
         self.assertTrue(agents.endswith(END + "\n"))
@@ -31,10 +33,12 @@ class InitTests(ProjectCase):
         self.assertEqual((self.project / VENDORED).read_bytes(), CLI.read_bytes())
         self.assertIn("no corrections are encoded yet", self.vendored("check").stdout)
 
-    def test_init_writes_no_claude_files_and_no_hooks_by_default(self):
+    def test_init_writes_no_claude_md_and_no_hooks_by_default(self):
         self.cli("init", self.project)
-        for rel in ("CLAUDE.md", ".claude", ".cursor", ".codex", ".github"):
+        for rel in ("CLAUDE.md", ".claude/settings.json", ".cursor", ".codex", ".github"):
             self.assertFalse(self.exists(rel), rel)
+        self.assertTrue(self.exists(".claude/skills/encode-the-correction/SKILL.md"))
+        self.assertTrue(self.exists(".agents/skills/encode-the-correction/SKILL.md"))
 
     def test_init_refuses_an_existing_agents_file_and_writes_nothing(self):
         self.write("AGENTS.md", USER_AGENTS)
@@ -59,6 +63,65 @@ class InitTests(ProjectCase):
         out = self.cli("init", self.project, "--hooks", "all", "--dry-run").stdout
         self.assertIn("would create", out)
         self.assertFalse(self.project.exists())
+
+
+
+    def test_init_refuses_an_existing_skill_file_and_writes_nothing(self):
+        self.write(SKILL_PATHS[0], "---\nname: other\ndescription: not ours\n---\n\n# Keep me\n")
+        before = self.snapshot()
+        proc = self.cli("init", self.project, expect=2)
+        self.assertIn("adopt", proc.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+
+class SkillInstallTests(ProjectCase):
+    def setUp(self):
+        super().setUp()
+        self.project.mkdir()
+
+    def test_adopt_installs_the_same_skill_in_both_auto_load_paths(self):
+        from encode_the_correction import SKILL_BODY
+        self.cli("adopt", self.project)
+        for rel in SKILL_PATHS:
+            self.assertEqual(self.read(rel), SKILL_BODY)
+        # Cursor/Codex/Copilot load .agents/skills; Claude Code loads .claude/skills.
+
+    def test_adopt_refreshes_a_stale_skill_it_installed(self):
+        from encode_the_correction import SKILL_BODY
+        self.cli("adopt", self.project)
+        stale = SKILL_PATHS[0]
+        self.write(stale, "---\nname: encode-the-correction\ndescription: stale\n---\n\n# stale\n")
+        # hash in the manifest still matches the original, so this counts as an edit
+        proc = self.cli("adopt", self.project, expect=2)
+        self.assertIn("--force", proc.stderr)
+        self.cli("adopt", self.project, "--force")
+        self.assertEqual(self.read(stale), SKILL_BODY)
+
+    def test_adopt_does_not_overwrite_a_foreign_skill_without_force(self):
+        foreign = "---\nname: encode-the-correction\ndescription: already here\n---\n\n# Mine\n"
+        self.write(SKILL_PATHS[1], foreign)
+        proc = self.cli("adopt", self.project, expect=2)
+        self.assertIn(SKILL_PATHS[1], proc.stderr)
+        self.assertEqual(self.read(SKILL_PATHS[1]), foreign)
+
+    def test_uninstall_removes_the_skill_and_empty_skill_directories(self):
+        self.write("src/app.py", "print('hi')\n")
+        self.cli("adopt", self.project)
+        self.cli("uninstall", self.project, "--purge")
+        self.assertEqual(self.snapshot(), {"src": None, "src/app.py": b"print('hi')\n"})
+        for rel in (".agents", ".claude"):
+            self.assertFalse(self.exists(rel), rel)
+
+    def test_uninstall_leaves_other_skills_alone(self):
+        self.write(".agents/skills/other/SKILL.md", "---\nname: other\ndescription: keep\n---\n\n# Other\n")
+        self.write(".claude/settings.json", "{\n  \"permissions\": {}\n}\n")
+        before_other = self.read(".agents/skills/other/SKILL.md")
+        self.cli("adopt", self.project)
+        self.cli("uninstall", self.project, "--purge")
+        self.assertEqual(self.read(".agents/skills/other/SKILL.md"), before_other)
+        self.assertFalse(self.exists(SKILL_PATHS[0]))
+        self.assertFalse(self.exists(SKILL_PATHS[1]))
+        self.assertTrue(self.exists(".claude/settings.json"))
 
 
 class AdoptTests(ProjectCase):

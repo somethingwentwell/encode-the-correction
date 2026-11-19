@@ -18,6 +18,22 @@ BEGIN = "<!-- BEGIN encode-the-correction"
 END = "<!-- END encode-the-correction -->"
 
 CONSOLE = "encode-the-correction"
+SKILL_NAME = "encode-the-correction"
+SKILL_PATHS = (
+    ".agents/skills/%s/SKILL.md" % SKILL_NAME,
+    ".claude/skills/%s/SKILL.md" % SKILL_NAME,
+)
+
+
+def skill_tree():
+    """Directories and files init/adopt create for the project skill."""
+    paths = []
+    for rel in SKILL_PATHS:
+        parts = rel.split("/")
+        for i in range(1, len(parts) + 1):
+            paths.append("/".join(parts[:i]))
+    return sorted(set(paths))
+
 # What the launcher that pip generates for the console script does, verbatim.
 CONSOLE_SHIM = "import sys; from encode_the_correction import main; sys.exit(main())"
 SKIP_INSTALL_ENV = "ETC_SKIP_INSTALL_TESTS"

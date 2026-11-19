@@ -1,0 +1,9 @@
+# pre-commit hook manifest: https://pre-commit.com/#creating-new-hooks
+# The check always scans the whole project, so it takes no filenames and runs on every commit.
+- id: encode-the-correction
+  name: encode-the-correction check
+  description: Run every correction encoded in .encode-the-correction/corrections.json and fail on a violation.
+  entry: encode-the-correction check
+  language: python
+  pass_filenames: false
+  always_run: true

@@ -1,6 +1,7 @@
 """Shared helpers. Every test works in a throwaway project under the system temp dir."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,61 @@ REGISTRY = TOOL_DIR + "/corrections.json"
 BEGIN = "<!-- BEGIN encode-the-correction"
 END = "<!-- END encode-the-correction -->"
 
+CONSOLE = "encode-the-correction"
+# What the launcher that pip generates for the console script does, verbatim.
+CONSOLE_SHIM = "import sys; from encode_the_correction import main; sys.exit(main())"
+SKIP_INSTALL_ENV = "ETC_SKIP_INSTALL_TESTS"
+
 sys.path.insert(0, str(REPO))
+
+
+def copy_repo(dest):
+    """A copy of this repo's working tree to build from, so pip never writes build files into the repo."""
+    shutil.copytree(str(REPO), str(dest), ignore=shutil.ignore_patterns(
+        ".git", "__pycache__", "build", "dist", "*.egg-info", ".venv", "venv", ".tox"))
+    return dest
+
+
+def pip_env(scratch, **extra):
+    """The caller's environment (pip needs its proxy and index settings) with pip's cache kept in `scratch`."""
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PIP_REQUIRE_VIRTUALENV")}
+    env.update(PIP_CACHE_DIR=str(Path(scratch) / "pip-cache"), PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1")
+    env.update(extra)
+    return env
+
+
+def install_tests_skip_reason():
+    if os.environ.get(SKIP_INSTALL_ENV):
+        return "%s is set" % SKIP_INSTALL_ENV
+    return None
+
+
+class InstalledVenv:
+    """This repo pip-installed into a throwaway virtual environment, built once per test class."""
+
+    def __init__(self, scratch):
+        scratch = Path(scratch)
+        self.root = scratch / "venv"
+        try:
+            import ensurepip  # noqa: F401  (some distributions ship venv and ensurepip separately)
+            import venv  # noqa: F401
+        except ImportError as exc:
+            raise unittest.SkipTest("this Python cannot create a virtual environment with pip (%s)" % exc)
+        done = subprocess.run([sys.executable, "-m", "venv", str(self.root)], capture_output=True, text=True, timeout=300)
+        if done.returncode != 0:
+            raise AssertionError("`python -m venv` failed:\n%s%s" % (done.stdout, done.stderr))
+        self.bin = self.root / ("Scripts" if os.name == "nt" else "bin")
+        self.python = self.bin / ("python.exe" if os.name == "nt" else "python")
+        self.console = self.bin / (CONSOLE + (".exe" if os.name == "nt" else ""))
+        done = subprocess.run(
+            [str(self.python), "-m", "pip", "install", str(copy_repo(scratch / "source"))],
+            env=pip_env(scratch), capture_output=True, text=True, timeout=900,
+        )
+        if done.returncode != 0:
+            raise AssertionError(
+                "`pip install` of this repo failed. pip downloads the build backend (setuptools); on a "
+                "machine without network access set %s=1 to skip these tests.\n%s%s"
+                % (SKIP_INSTALL_ENV, done.stdout, done.stderr))
 
 
 class ProjectCase(unittest.TestCase):
@@ -58,6 +113,20 @@ class ProjectCase(unittest.TestCase):
     def vendored(self, *args, **kwargs):
         """Run the copy installed inside the temp project."""
         return self.run_argv([sys.executable, self.project / VENDORED] + list(args), **kwargs)
+
+    def installed(self, *args, **kwargs):
+        """Run the tool the way an installed console script does, without installing anything.
+
+        The module is imported from a site-packages-like directory that is neither this
+        repo nor inside a project, and entered through `main`, exactly as the generated
+        launcher does. `cwd` is what tells it which project to work on.
+        """
+        site = self.tmp / "site-packages"
+        if not site.exists():
+            site.mkdir()
+            shutil.copy(str(CLI), str(site / CLI.name))
+        env = dict(kwargs.pop("env", None) or {}, PYTHONPATH=str(site))
+        return self.run_argv([sys.executable, "-c", CONSOLE_SHIM] + list(args), env=env, **kwargs)
 
     def shell(self, command, cwd=None, shell="sh", **kwargs):
         """Run a hook command string the way a runtime would: through a shell."""

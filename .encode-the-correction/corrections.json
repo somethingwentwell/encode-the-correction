@@ -56,6 +56,17 @@
       "message": "Code touches user-global or system git configuration.",
       "fix": "Scope the setting to the one repo (git -C <repo> config --local ...) or pass it per command with -c.",
       "why": "Requirement: local project scope only."
+    },
+    {
+      "id": "package-has-no-runtime-dependencies",
+      "type": "require-pattern",
+      "pattern": "^dependencies = \\[\\]$",
+      "include": [
+        "pyproject.toml"
+      ],
+      "message": "pyproject.toml declares a runtime dependency (or no longer declares an empty list). The installed CLI must run on a bare Python 3.8+.",
+      "fix": "Do the work with the standard library and keep `dependencies = []`; setuptools belongs only in [build-system].",
+      "why": "Requirement: stdlib-only runtime; setuptools may be the build backend, never a runtime dependency."
     }
   ]
 }

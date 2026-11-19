@@ -1,0 +1,10 @@
+# Example for a project that has adopted encode-the-correction.
+# Merge this job into the project's .gitlab-ci.yml.
+# GitLab fails the job on any non-zero exit, so a violated correction (exit 1)
+# or a broken registry (exit 2) fails the pipeline.
+# The image needs Python 3.8+ and git (pip uses git to fetch the tool).
+encode-the-correction:
+  image: python:3.13
+  script:
+    - python -m pip install "git+https://github.com/somethingwentwell/encode-the-correction.git"
+    - encode-the-correction check

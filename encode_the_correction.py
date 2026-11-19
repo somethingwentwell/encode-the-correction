@@ -9,6 +9,11 @@ Single file, Python 3.8+ standard library only. Checks are data (regexes and
 globs in a project-local JSON registry); this tool never executes registry
 text, file content, or anything else it reads.
 
+The same file runs three ways: installed (`pip install`, console script
+`encode-the-correction`), straight from a checkout (`python3
+encode_the_correction.py`), and vendored into a project by `adopt`
+(`python3 .encode-the-correction/cli.py`).
+
 Exit codes: 0 ok, 1 a check failed, 2 usage/configuration error.
 """
 import argparse
@@ -21,7 +26,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 TOOL = "encode-the-correction"
 TOOL_DIR = ".encode-the-correction"
 CLI_REL = TOOL_DIR + "/cli.py"
@@ -195,12 +200,38 @@ def own_source():
         return handle.read()
 
 
-def default_project():
-    """The vendored copy defaults to the project it lives in; otherwise the cwd."""
+def find_project(start):
+    """The nearest directory at or above `start` that holds a registry, else None.
+
+    The search never leaves the repository `start` is in: a directory with a
+    `.git` entry is the last one looked at.
+    """
+    current = os.path.abspath(start)
+    while True:
+        if os.path.isfile(os.path.join(current, *REGISTRY_REL.split("/"))):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current or os.path.lexists(os.path.join(current, ".git")):
+            return None
+        current = parent
+
+
+def default_project(discover=False):
+    """The vendored copy defaults to the project it lives in; otherwise the cwd.
+
+    With `discover`, an installed or checked-out CLI finds the project the way a
+    linter finds its config: the cwd, or the nearest parent holding a registry.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     if os.path.basename(here) == TOOL_DIR:
         return os.path.dirname(here)
-    return os.getcwd()
+    cwd = os.getcwd()
+    return (find_project(cwd) if discover else None) or cwd
+
+
+def run_command(project):
+    """How to invoke the tool in `project`: its vendored copy when it has one, else the installed CLI."""
+    return RUN if project.exists(CLI_REL) else TOOL
 
 
 # --------------------------------------------------------------------------
@@ -898,11 +929,11 @@ def run_checks(project, corrections):
     return results, len(files)
 
 
-def render_report(results, file_count, max_findings):
+def render_report(results, file_count, max_findings, run=RUN):
     failed = [result for result in results if not result["ok"]]
     if not results:
         return ("%s: no corrections are encoded yet (0 checks). When a human corrects you, encode "
-                "the correction as a check instead of a prose rule: %s encode --help" % (TOOL, RUN))
+                "the correction as a check instead of a prose rule: %s encode --help" % (TOOL, run))
     if not failed:
         return "%s: OK - all %d encoded corrections pass (%d files scanned)." % (TOOL, len(results), file_count)
     lines = []
@@ -930,7 +961,7 @@ def render_report(results, file_count, max_findings):
 
 
 def cmd_check(args):
-    project = Project(args.project or default_project())
+    project = Project(args.project or default_project(discover=True))
     corrections = load_corrections(project)
     if args.only:
         unknown = sorted(set(args.only) - {c.id for c in corrections})
@@ -942,15 +973,15 @@ def cmd_check(args):
     if args.format == "json":
         print(json.dumps({"ok": ok, "files_scanned": file_count, "corrections": results}, indent=2))
     else:
-        print(render_report(results, file_count, args.max_findings))
+        print(render_report(results, file_count, args.max_findings, run_command(project)))
     return 0 if ok else 1
 
 
 def cmd_list(args):
-    project = Project(args.project or default_project())
+    project = Project(args.project or default_project(discover=True))
     corrections = load_corrections(project)
     if not corrections:
-        print("%s: no corrections encoded yet. Add one with: %s encode --help" % (TOOL, RUN))
+        print("%s: no corrections encoded yet. Add one with: %s encode --help" % (TOOL, run_command(project)))
         return 0
     for c in corrections:
         target = "/%s/ in " % c.regex.pattern if c.regex else ""
@@ -966,7 +997,7 @@ def cmd_list(args):
 # --------------------------------------------------------------------------
 
 def cmd_encode(args):
-    project = Project(args.project or default_project())
+    project = Project(args.project or default_project(discover=True))
     data = load_registry_raw(project)
     entry = {"id": args.id}
     if args.forbid is not None:
@@ -1003,13 +1034,14 @@ def cmd_encode(args):
 
     results, _ = run_checks(project, [correction])
     count = len(results[0]["findings"])
+    run = run_command(project)
     print("%s: %s '%s' (%s) in %s" % (TOOL, "replaced" if existing else "encoded", args.id, entry["type"], REGISTRY_REL))
     if count:
         print("It fails right now at %d place%s. Run `%s check` and fix each one at the root cause."
-              % (count, "" if count == 1 else "s", RUN))
+              % (count, "" if count == 1 else "s", run))
     else:
         print("It matches nothing right now. If the mistake is still in the code, the pattern or globs "
-              "are wrong: a check that never fails enforces nothing. Verify with `%s check`." % RUN)
+              "are wrong: a check that never fails enforces nothing. Verify with `%s check`." % run)
     return 0
 
 
@@ -1020,20 +1052,24 @@ def cmd_encode(args):
 def session_text(project):
     corrections = load_corrections(project)
     results, file_count = run_checks(project, corrections)
-    text = render_report(results, file_count, 5)
+    run = run_command(project)
+    text = render_report(results, file_count, 5, run)
     if results and all(result["ok"] for result in results):
         text += (" If a human corrects you in this session, encode the correction as a check "
-                 "(see AGENTS.md): %s encode --help" % RUN)
+                 "(see AGENTS.md): %s encode --help" % run)
     if len(text) > 6000:
-        text = text[:6000] + "\n... truncated; run `%s check` for the full report." % RUN
+        text = text[:6000] + "\n... truncated; run `%s check` for the full report." % run
     return text
 
 
 def cmd_session_hook(args):
+    run = RUN
     try:
-        text = session_text(Project(args.project or default_project()))
+        project = Project(args.project or default_project(discover=True))
+        run = run_command(project)
+        text = session_text(project)
     except Exception as exc:  # a session hook must never break the session it reports to
-        text = "%s: could not run the checks (%s). Run `%s check` yourself." % (TOOL, exc, RUN)
+        text = "%s: could not run the checks (%s). Run `%s check` yourself." % (TOOL, exc, run)
     if args.runtime == "cursor":
         print(json.dumps({"additional_context": text}))
     elif args.runtime == "copilot":
@@ -1057,7 +1093,10 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", metavar="command")
     sub.required = True
 
-    def add(name, func, help_text, project_help="project directory (default: the project this script is installed in, else the current directory)"):
+    here = "project directory (default: the project this script is vendored in, else the current directory)"
+    found = here + "; an installed CLI also looks in parent directories for the nearest registry"
+
+    def add(name, func, help_text, project_help=found):
         p = sub.add_parser(name, help=help_text, description=help_text)
         p.add_argument("project", nargs="?", help=project_help)
         p.set_defaults(func=func)
@@ -1067,7 +1106,7 @@ def build_parser():
         ("init", cmd_init, "Start in a new project. Refuses to touch existing instruction or hook files."),
         ("adopt", cmd_adopt, "Adopt into an existing project. Merges, preserves existing content, idempotent."),
     ):
-        p = add(name, func, text)
+        p = add(name, func, text, here)
         p.add_argument("--hooks", action="append", metavar="RUNTIME[,RUNTIME]",
                        help="also install a session-start hook for: %s, or all (default: none)" % ", ".join(ADAPTERS))
         p.add_argument("--claude-md", choices=("auto", "always", "never"), default="auto",
@@ -1078,12 +1117,13 @@ def build_parser():
         p.add_argument("--dry-run", action="store_true", help="show what would change; write nothing")
 
     p = add("uninstall", cmd_uninstall,
-            "Remove this tool's tagged blocks, hook entries, and files. Keeps everything else.")
+            "Remove this tool's tagged blocks, hook entries, and files. Keeps everything else.", here)
     p.add_argument("--purge", action="store_true",
                    help="also delete the registry of encoded corrections and tool files you edited")
     p.add_argument("--dry-run", action="store_true", help="show what would be removed; remove nothing")
 
-    p = add("check", cmd_check, "Run every encoded correction. Exit 1 if any is violated.")
+    p = add("check", cmd_check, "Run every encoded correction. Exit 0 when all pass, 1 when any is "
+                                "violated, 2 on a configuration error.")
     p.add_argument("--only", action="append", metavar="ID", help="run only this correction (repeatable)")
     p.add_argument("--format", choices=("text", "json"), default="text")
     p.add_argument("--max-findings", type=int, default=20, metavar="N",
@@ -1114,10 +1154,15 @@ def build_parser():
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        # A path or source line the terminal cannot encode must not crash a check:
+        # a traceback exits 1, which CI would read as "a correction was violated".
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except ToolError as exc:
+    except (ToolError, OSError) as exc:
         print("%s: error: %s" % (TOOL, exc), file=sys.stderr)
         return 2
 

@@ -5,7 +5,8 @@ runtime's documented project-level config file. Every hook runs the same wrapper
 `.encode-the-correction/hooks/session-start.sh <runtime>`, which runs
 `cli.py session-hook`: the same checks as `cli.py check`, printed in the output
 shape that runtime documents. The wrapper always exits 0, so a hook can inform
-an agent but never block a session; use `check` in CI when you need a gate.
+an agent but never block a session; use `check` in pre-commit or CI when you
+need a gate ([ci.md](ci.md)).
 
 The schemas below were re-verified against the official documentation on
 2026-11-19. Re-verify before changing an adapter, and do not add a runtime whose

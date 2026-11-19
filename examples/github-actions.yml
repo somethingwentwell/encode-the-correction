@@ -1,0 +1,25 @@
+# Example for a project that has adopted encode-the-correction.
+# Copy to .github/workflows/encode-the-correction.yml in that project.
+# The job fails when `check` exits 1 (a correction is violated) or 2 (bad registry).
+# For reproducible runs, pin the install to a commit or tag: append @<sha-or-tag> to the URL.
+name: encode-the-correction
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Install encode-the-correction
+        run: python -m pip install "git+https://github.com/somethingwentwell/encode-the-correction.git"
+      - name: Check the encoded corrections
+        run: encode-the-correction check

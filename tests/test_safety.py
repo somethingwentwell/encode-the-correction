@@ -183,6 +183,7 @@ class RepoTests(ProjectCase):
             "subprocess.run(['git', 'config', '--%s', 'user.name', 'x'])" % "global",
         ]) + "\n")
         self.write("tests/test_x.py", "PROJECT = %r\n" % root)
+        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["requests"]\n')
         report = json.loads(self.vendored("check", "--format", "json", expect=1).stdout)
         failed = {c["id"]: [f["line"] for f in c["findings"]] for c in report["corrections"] if not c["ok"]}
         self.assertEqual(failed, {
@@ -191,6 +192,7 @@ class RepoTests(ProjectCase):
             "cli-stdlib-only": [1],
             "tests-use-temp-projects-only": [1],
             "git-config-stays-local": [6],
+            "package-has-no-runtime-dependencies": [None],
         })
 
     def test_readme_covers_the_four_required_topics(self):

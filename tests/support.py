@@ -76,6 +76,9 @@ class InstalledVenv:
 
 class ProjectCase(unittest.TestCase):
     maxDiff = None
+    # Shells invoked by adapter tests may create these in $HOME (pwsh on GitHub
+    # Actions writes .cache and .local even with -NoProfile). They are not this tool.
+    _RUNTIME_HOME_ENTRIES = frozenset({".cache", ".config", ".local"})
 
     def setUp(self):
         holder = tempfile.TemporaryDirectory(prefix="etc-test-")
@@ -92,8 +95,12 @@ class ProjectCase(unittest.TestCase):
         self.env["HOME"] = str(self.home)
 
     def tearDown(self):
-        # Local project scope only: nothing may ever be written to the user's home.
-        self.assertEqual(sorted(p.name for p in self.home.iterdir()), [], "the tool wrote to $HOME")
+        # Local project scope only: the tool itself must never write to $HOME.
+        unexpected = sorted(
+            p.name for p in self.home.iterdir()
+            if p.name not in self._RUNTIME_HOME_ENTRIES
+        )
+        self.assertEqual(unexpected, [], "the tool wrote to $HOME")
 
     # -- running things ----------------------------------------------------
 

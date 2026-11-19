@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "corrections": [
+    {
+      "id": "cli-never-runs-a-shell",
+      "type": "forbid-pattern",
+      "pattern": "shell\\s*=\\s*True|\\bos\\.(system|popen)\\(",
+      "include": [
+        "encode_the_correction.py"
+      ],
+      "message": "The CLI hands text to a shell. Registry entries, file content and transcripts are untrusted data and must never be executed.",
+      "fix": "Express the check as data (regex or glob). If a process is unavoidable, pass a fixed argv list to subprocess.run, never a shell string.",
+      "why": "Safety requirement: never execute untrusted transcript or instruction text as code."
+    },
+    {
+      "id": "cli-no-dynamic-code",
+      "type": "forbid-pattern",
+      "pattern": "(?<![.\\w])(eval|exec|compile|__import__)\\(",
+      "include": [
+        "encode_the_correction.py"
+      ],
+      "message": "Dynamic code execution in the CLI turns any text it reads into a possible program.",
+      "fix": "Parse the input as data (json, re) and act on the parsed value; do not evaluate it.",
+      "why": "Safety requirement: never execute untrusted transcript or instruction text as code."
+    },
+    {
+      "id": "cli-stdlib-only",
+      "type": "forbid-pattern",
+      "pattern": "^\\s*(import|from)\\s+(yaml|toml|requests|click|typer|rich|pytest|setuptools)\\b",
+      "include": [
+        "*.py"
+      ],
+      "message": "Third-party import. The core must run on a bare Python 3 with no package registry, Node, or agent runtime.",
+      "fix": "Use the standard library (json, re, argparse, unittest), or drop the feature that needs the dependency.",
+      "why": "Requirement: portable Python 3 standard-library-only CLI."
+    },
+    {
+      "id": "tests-use-temp-projects-only",
+      "type": "forbid-pattern",
+      "pattern": "/workspace",
+      "include": [
+        "tests/**"
+      ],
+      "message": "A test names a real path under /workspace. Tests may only touch throwaway projects in the system temp dir.",
+      "fix": "Build the project under the ProjectCase temp dir (self.project / self.tmp) and reach this repo only through support.REPO.",
+      "why": "Requirement: tests must never use a real user repo."
+    },
+    {
+      "id": "git-config-stays-local",
+      "type": "forbid-pattern",
+      "pattern": "git\\b.*--global|--system\\b",
+      "include": [
+        "*.py",
+        "*.sh"
+      ],
+      "message": "Code touches user-global or system git configuration.",
+      "fix": "Scope the setting to the one repo (git -C <repo> config --local ...) or pass it per command with -c.",
+      "why": "Requirement: local project scope only."
+    }
+  ]
+}
